@@ -1,1 +1,166 @@
 
+# Import required packages
+import numpy as np
+import logging
+import pyLDAvis.gensim
+import json
+import warnings
+warnings.filterwarnings('ignore')  # To ignore all warnings that arise here to enhance clarity
+
+from gensim.models.coherencemodel import CoherenceModel
+from gensim.models.ldamodel import LdaModel
+from gensim.corpora.dictionary import Dictionary
+from numpy import array
+
+# Import dataset
+p_df = pd.read_csv('Reviews.csv')
+# Create sample of 10,000 reviews
+p_df = p_df.sample(n = 10000)
+# Convert to array
+docs =array(p_df['Text'])
+# Define function for tokenize and lemmatizing
+from nltk.stem.wordnet import WordNetLemmatizer
+from nltk.tokenize import RegexpTokenizer
+
+def docs_preprocessor(docs):
+    tokenizer = RegexpTokenizer(r'\w+')
+    for idx in range(len(docs)):
+        docs[idx] = docs[idx].lower()  # Convert to lowercase.
+        docs[idx] = tokenizer.tokenize(docs[idx])  # Split into words.
+
+    # Remove numbers, but not words that contain numbers.
+    docs = [[token for token in doc if not token.isdigit()] for doc in docs]
+    
+    # Remove words that are only one character.
+    docs = [[token for token in doc if len(token) > 3] for doc in docs]
+    
+    # Lemmatize all words in documents.
+    lemmatizer = WordNetLemmatizer()
+    docs = [[lemmatizer.lemmatize(token) for token in doc] for doc in docs]
+  
+    return docs
+# Perform function on our document
+docs = docs_preprocessor(docs)
+#Create Biagram & Trigram Models 
+from gensim.models import Phrases
+# Add bigrams and trigrams to docs,minimum count 10 means only that appear 10 times or more.
+bigram = Phrases(docs, min_count=10)
+trigram = Phrases(bigram[docs])
+
+for idx in range(len(docs)):
+    for token in bigram[docs[idx]]:
+        if '_' in token:
+            # Token is a bigram, add to document.
+            docs[idx].append(token)
+    for token in trigram[docs[idx]]:
+        if '_' in token:
+            # Token is a bigram, add to document.
+            docs[idx].append(token)
+#Remove rare & common tokens 
+# Create a dictionary representation of the documents.
+dictionary = Dictionary(docs)
+dictionary.filter_extremes(no_below=10, no_above=0.2)
+#Create dictionary and corpus required for Topic Modeling
+corpus = [dictionary.doc2bow(doc) for doc in docs]
+print('Number of unique tokens: %d' % len(dictionary))
+print('Number of documents: %d' % len(corpus))
+print(corpus[:1])
+
+############
+
+
+# Set parameters.
+num_topics = 5
+chunksize = 500 
+passes = 20 
+iterations = 400
+eval_every = 1  
+
+# Make a index to word dictionary.
+temp = dictionary[0]  # only to "load" the dictionary.
+id2word = dictionary.id2token
+
+lda_model = LdaModel(corpus=corpus, id2word=id2word, chunksize=chunksize, \
+                       alpha='auto', eta='auto', \
+                       iterations=iterations, num_topics=num_topics, \
+                       passes=passes, eval_every=eval_every)
+# Print the Keyword in the 5 topics
+print(lda_model.print_topics())
+
+
+#############
+
+# Compute Coherence Score using c_v
+coherence_model_lda = CoherenceModel(model=lda_model, texts=docs, dictionary=dictionary, coherence='c_v')
+coherence_lda = coherence_model_lda.get_coherence()
+print('\nCoherence Score: ', coherence_lda)
+
+# Compute Coherence Score using UMass
+coherence_model_lda = CoherenceModel(model=lda_model, texts=docs, dictionary=dictionary, coherence="u_mass")
+coherence_lda = coherence_model_lda.get_coherence()
+print('\nCoherence Score: ', coherence_lda)
+
+##################
+
+def compute_coherence_values(dictionary, corpus, texts, limit, start=2, step=3):
+    """
+    Compute c_v coherence for various number of topics
+
+    Parameters:
+    ----------
+    dictionary : Gensim dictionary
+    corpus : Gensim corpus
+    texts : List of input texts
+    limit : Max num of topics
+
+    Returns:
+    -------
+    model_list : List of LDA topic models
+    coherence_values : Coherence values corresponding to the LDA model with respective number of topics
+    """
+    coherence_values = []
+    model_list = []
+    for num_topics in range(start, limit, step):
+        model=LdaModel(corpus=corpus, id2word=dictionary, num_topics=num_topics)
+        model_list.append(model)
+        coherencemodel = CoherenceModel(model=model, texts=texts, dictionary=dictionary, coherence='c_v')
+        coherence_values.append(coherencemodel.get_coherence())
+
+    return model_list, coherence_values
+########
+
+model_list, coherence_values = compute_coherence_values(dictionary=dictionary, corpus=corpus, texts=docs, start=2, limit=40, step=6)
+# Show graph
+import matplotlib.pyplot as plt
+limit=40; start=2; step=6;
+x = range(start, limit, step)
+plt.plot(x, coherence_values)
+plt.xlabel("Num Topics")
+plt.ylabel("Coherence score")
+plt.legend(("coherence_values"), loc='best')
+plt.show()
+
+
+CV is based on a sliding window, a one-set segmentation of the top words and an indirect confirmation measure that uses normalized pointwise mutual information (NPMI) and the cosinus similarity.
+CUCI is a coherence that is based on a sliding window and the pointwise mutual information (PMI) of all word pairs of the given top words.
+CUMass is based on document cooccurrence counts, a one-preceding segmentation and a logarithmic conditional probability as confirmation measure.
+
+
+topic coherence framework, which is grouped into 4 following dimensions:
+
+Segmentation: A lot of dispatch product divided into different sub-lot sizes, such that each sub-lot product are different.
+Probability Estimation: Quantitative Measurement of sub lot quality.
+Confirmation Measure: Determine quality as per some predefined standard (say % conformance) and assign some number to qualify. For example, 75% of products are good quality as per XXX standard.
+Aggregation: It’s the central lab where you combine all the quality numbers and derive a single number for overall quality.
+From a technical point of view, Coherence framework is represented as a composition of parts that can be combined. The parts are grouped into dimensions that span the configuration space of coherence measures. Each dimension is characterized by a set of exchangeable components.
+
+First, the word set t is segmented into a set of pairs of word subsets S. Second, word probabilities P are computed based on a given reference corpus. Both, the set of word subsets S as well as the computed probabilities P are consumed by the confirmation measure to calculate the agreements ϕ of pairs of S. Last, those values are aggregated to a single coherence value c.
+
+There are 2 measures in Topic coherence :
+
+Intrinsic Measure
+It is represented as UMass. It measures to compare a word only to the preceding and succeeding words respectively, so need ordered word set.It uses as pairwise score function which is the empirical conditional log-probability with smoothing count to avoid calculating the logarithm of zero.
+
+Extrinsic Measure
+It is represented as UCI. In UCI measure, every single word is paired with every other single word. The UCIcoherence uses pointwise mutual information (PMI).
+Both Intrinsic and Extrinsic measure compute the coherence score c (sum of pairwise scores on the words w1, …, wn used to describe the topic).
